@@ -15,7 +15,7 @@ class BrowserEngine:
         self._playwright = await async_playwright().start()
 
         launch_args = {
-            "headless": False,
+            "headless": config.BROWSER_HEADLESS,
             "args": [
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
@@ -25,9 +25,6 @@ class BrowserEngine:
                 "--no-zygote",
             ]
         }
-
-        if config.BROWSER_HEADLESS:
-            launch_args["args"].append("--headless")
 
         if config.PROXY_ENABLED and config.PROXY_URL:
             launch_args["proxy"] = {"server": config.PROXY_URL}
@@ -117,7 +114,7 @@ class BrowserEngine:
     async def navigate(self, url: str) -> bool:
         for attempt in range(1, config.MAX_RETRIES + 1):
             try:
-                await self.page.goto(url, timeout=config.PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+                await self.page.goto(url, timeout=config.PAGE_TIMEOUT_MS, wait_until="load")
                 await self._human_delay()
                 await self.human_mouse_move()
                 return True
