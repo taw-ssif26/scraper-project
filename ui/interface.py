@@ -1,0 +1,542 @@
+import asyncio
+import threading
+import os
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from orchestrator import Orchestrator, State
+
+app = FastAPI()
+
+# ── Background event loop for Playwright ─────────────────────────────────────
+_loop: asyncio.AbstractEventLoop = None
+_orchestrator: Orchestrator = None
+_log_lines: list[str] = []
+
+
+def _start_background_loop():
+    global _loop
+    _loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_loop)
+    _loop.run_forever()
+
+
+threading.Thread(target=_start_background_loop, daemon=True).start()
+
+
+def _run_async(coro):
+    asyncio.run_coroutine_threadsafe(coro, _loop)
+
+
+# ── API Routes ────────────────────────────────────────────────────────────────
+
+class ScrapeRequest(BaseModel):
+    url: str
+    task: str
+
+
+@app.post("/api/start")
+def start(req: ScrapeRequest):
+    global _orchestrator, _log_lines
+
+    if not req.url.strip():
+        return JSONResponse({"ok": False, "error": "URL is required"})
+    if not req.task.strip():
+        return JSONResponse({"ok": False, "error": "Task is required"})
+
+    _log_lines = []
+
+    def log(msg):
+        _log_lines.append(msg)
+
+    _orchestrator = Orchestrator(log_callback=log)
+    _run_async(_orchestrator.run(req.url.strip(), req.task.strip()))
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/stop")
+def stop():
+    if _orchestrator:
+        _orchestrator.stop()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/resume")
+def resume():
+    if _orchestrator:
+        _orchestrator.resolve_captcha()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/status")
+def status():
+    if not _orchestrator:
+        return JSONResponse({
+            "state": "idle",
+            "logs": [],
+            "records": 0,
+            "output": None,
+            "captcha": False,
+        })
+    return JSONResponse({
+        "state": _orchestrator.state.value,
+        "logs": _log_lines[-30:],
+        "records": len(_orchestrator.records),
+        "output": _orchestrator.output_paths.get("csv") if _orchestrator.output_paths else None,
+        "captcha": _orchestrator.state == State.PAUSED,
+    })
+
+
+@app.get("/api/download")
+def download():
+    if not _orchestrator or not _orchestrator.output_paths:
+        return JSONResponse({"error": "No file available"}, status_code=404)
+    csv_path = _orchestrator.output_paths.get("csv")
+    if not csv_path or not os.path.exists(csv_path):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    return FileResponse(
+        csv_path,
+        media_type="text/csv",
+        filename=os.path.basename(csv_path)
+    )
+
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    return HTMLResponse(HTML)
+
+
+# ── Single-file HTML UI ───────────────────────────────────────────────────────
+
+HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScraperAI</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --surface2:  #1c2333;
+    --border:    #30363d;
+    --blue:      #2f81f7;
+    --blue-dim:  #1a4a8a;
+    --green:     #3fb950;
+    --red:       #f85149;
+    --yellow:    #d29922;
+    --text:      #e6edf3;
+    --text-dim:  #8b949e;
+    --radius:    8px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  header {
+    padding: 16px 32px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--surface);
+  }
+  header .logo {
+    width: 32px; height: 32px;
+    background: var(--blue);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+  header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+  header span { color: var(--text-dim); font-size: 13px; margin-left: auto; }
+
+  /* ── Layout ── */
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 32px 24px;
+    width: 100%;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 14px;
+  }
+
+  /* ── Inputs ── */
+  label {
+    display: block;
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+  input, textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 14px;
+    padding: 10px 14px;
+    outline: none;
+    transition: border-color 0.15s;
+    font-family: inherit;
+  }
+  input:focus, textarea:focus { border-color: var(--blue); }
+  textarea { resize: vertical; min-height: 72px; }
+  .input-group { margin-bottom: 14px; }
+  .input-group:last-child { margin-bottom: 0; }
+
+  /* ── Buttons ── */
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  button {
+    padding: 9px 20px;
+    border-radius: var(--radius);
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  button:active { transform: scale(0.97); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-primary { background: var(--blue); color: #fff; }
+  .btn-primary:hover:not(:disabled) { opacity: 0.88; }
+  .btn-danger  { background: #2d1618; color: var(--red); border: 1px solid #5a1e20; }
+  .btn-danger:hover:not(:disabled) { background: #3d1e20; }
+  .btn-warning { background: #2d2208; color: var(--yellow); border: 1px solid #5a4208; }
+  .btn-warning:hover { background: #3d2f10; }
+  .btn-success { background: #0d2818; color: var(--green); border: 1px solid #1a4a28; }
+  .btn-success:hover { background: #1a3820; }
+
+  /* ── Status bar ── */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .dot-idle    { background: var(--text-dim); }
+  .dot-running { background: var(--blue); animation: pulse 1.4s infinite; }
+  .dot-paused  { background: var(--yellow); }
+  .dot-complete{ background: var(--green); }
+  .dot-error   { background: var(--red); }
+  .dot-stopped { background: var(--text-dim); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .record-count {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  /* ── Log ── */
+  .log-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    height: 280px;
+    overflow-y: auto;
+    color: var(--text-dim);
+  }
+  .log-box .log-line { margin: 0; }
+  .log-box .log-line.state  { color: var(--blue); }
+  .log-box .log-line.error  { color: var(--red); }
+  .log-box .log-line.cache  { color: var(--green); }
+  .log-box .log-line.warn   { color: var(--yellow); }
+
+  /* ── Captcha alert ── */
+  .captcha-alert {
+    display: none;
+    background: #2d2208;
+    border: 1px solid var(--yellow);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    color: var(--yellow);
+    font-size: 13px;
+    align-items: center;
+    gap: 12px;
+  }
+  .captcha-alert.visible { display: flex; }
+  .captcha-alert strong { font-weight: 700; }
+
+  /* ── Download ── */
+  .download-section {
+    display: none;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    background: #0d2818;
+    border: 1px solid #1a4a28;
+    border-radius: var(--radius);
+    color: var(--green);
+    font-size: 13px;
+  }
+  .download-section.visible { display: flex; }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center;
+    padding: 16px;
+    color: var(--text-dim);
+    font-size: 12px;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🕷</div>
+  <h1>ScraperAI</h1>
+  <span>AI-powered web extraction</span>
+</header>
+
+<div class="container">
+
+  <!-- Input card -->
+  <div class="card">
+    <div class="card-title">New Scrape Job</div>
+    <div class="input-group">
+      <label for="url">Target URL</label>
+      <input id="url" type="url" placeholder="https://example.com/products" autocomplete="off">
+    </div>
+    <div class="input-group">
+      <label for="task">What to extract</label>
+      <textarea id="task" placeholder="Extract all product names, prices, and ratings"></textarea>
+    </div>
+    <div class="btn-row">
+      <button class="btn-primary" id="btn-start">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><polygon points="2,1 11,6 2,11"/></svg>
+        Start
+      </button>
+      <button class="btn-danger" id="btn-stop" disabled>
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="1" y="1" width="10" height="10" rx="1"/></svg>
+        Stop
+      </button>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="status-bar">
+    <div class="dot dot-idle" id="dot"></div>
+    <span id="state-label">Idle — ready to scrape</span>
+    <span class="record-count" id="record-count"></span>
+  </div>
+
+  <!-- Captcha alert -->
+  <div class="captcha-alert" id="captcha-alert">
+    <span style="font-size:20px">⚠️</span>
+    <div>
+      <strong>Captcha detected.</strong>
+      Solve it in the browser window, then click Resume.
+    </div>
+    <button class="btn-warning" id="btn-resume" style="margin-left:auto">
+      ✓ Resume
+    </button>
+  </div>
+
+  <!-- Download -->
+  <div class="download-section" id="download-section">
+    <span style="font-size:18px">✅</span>
+    <div><strong>Scrape complete.</strong> Your data is ready.</div>
+    <button class="btn-success" id="btn-download" style="margin-left:auto">
+      ↓ Download CSV
+    </button>
+  </div>
+
+  <!-- Log card -->
+  <div class="card">
+    <div class="card-title">Live Log</div>
+    <div class="log-box" id="log-box">
+      <p class="log-line" style="color:#555">Waiting for job to start...</p>
+    </div>
+  </div>
+
+</div>
+
+<footer>ScraperAI — AI-powered web extraction tool</footer>
+
+<script>
+  const urlInput      = document.getElementById('url');
+  const taskInput     = document.getElementById('task');
+  const btnStart      = document.getElementById('btn-start');
+  const btnStop       = document.getElementById('btn-stop');
+  const btnResume     = document.getElementById('btn-resume');
+  const btnDownload   = document.getElementById('btn-download');
+  const dot           = document.getElementById('dot');
+  const stateLabel    = document.getElementById('state-label');
+  const recordCount   = document.getElementById('record-count');
+  const logBox        = document.getElementById('log-box');
+  const captchaAlert  = document.getElementById('captcha-alert');
+  const downloadSection = document.getElementById('download-section');
+
+  let pollInterval = null;
+  let lastLogCount = 0;
+
+  const STATE_LABELS = {
+    idle:     'Idle — ready to scrape',
+    running:  'Running...',
+    paused:   'Paused — captcha detected',
+    complete: 'Complete',
+    stopped:  'Stopped',
+    error:    'Error',
+  };
+
+  async function post(url, body) {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return r.json();
+  }
+
+  btnStart.addEventListener('click', async () => {
+    const url  = urlInput.value.trim();
+    const task = taskInput.value.trim();
+    if (!url)  { alert('Please enter a URL.');  return; }
+    if (!task) { alert('Please describe what to extract.'); return; }
+
+    logBox.innerHTML = '';
+    lastLogCount = 0;
+    downloadSection.classList.remove('visible');
+    captchaAlert.classList.remove('visible');
+
+    const res = await post('/api/start', {url, task});
+    if (!res.ok) { alert(res.error); return; }
+
+    btnStart.disabled = true;
+    btnStop.disabled  = false;
+    startPolling();
+  });
+
+  btnStop.addEventListener('click', async () => {
+    await post('/api/stop');
+  });
+
+  btnResume.addEventListener('click', async () => {
+    await post('/api/resume');
+    captchaAlert.classList.remove('visible');
+  });
+
+  btnDownload.addEventListener('click', () => {
+    window.location.href = '/api/download';
+  });
+
+  function startPolling() {
+    if (pollInterval) clearInterval(pollInterval);
+    pollInterval = setInterval(poll, 1500);
+  }
+
+  function stopPolling() {
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+  }
+
+  async function poll() {
+    let data;
+    try { data = await (await fetch('/api/status')).json(); }
+    catch { return; }
+
+    // Update dot
+    dot.className = 'dot dot-' + data.state;
+
+    // Update state label
+    stateLabel.textContent = STATE_LABELS[data.state] || data.state;
+
+    // Update record count
+    recordCount.textContent = data.records > 0 ? data.records + ' records' : '';
+
+    // Append new log lines only
+    if (data.logs.length > lastLogCount) {
+      const newLines = data.logs.slice(lastLogCount);
+      newLines.forEach(line => {
+        const p = document.createElement('p');
+        p.className = 'log-line';
+        if (line.includes('[State]'))  p.classList.add('state');
+        if (line.includes('error') || line.includes('Error') || line.includes('Fatal')) p.classList.add('error');
+        if (line.includes('cached') || line.includes('Saved')) p.classList.add('cache');
+        if (line.includes('CAPTCHA') || line.includes('outdated')) p.classList.add('warn');
+        p.textContent = line;
+        logBox.appendChild(p);
+      });
+      logBox.scrollTop = logBox.scrollHeight;
+      lastLogCount = data.logs.length;
+    }
+
+    // Captcha
+    captchaAlert.classList.toggle('visible', data.captcha);
+
+    // Terminal states
+    if (['complete', 'stopped', 'error'].includes(data.state)) {
+      btnStart.disabled = false;
+      btnStop.disabled  = true;
+      stopPolling();
+    }
+
+    // Download
+    if (data.state === 'complete' && data.output) {
+      downloadSection.classList.add('visible');
+    }
+  }
+</script>
+</body>
+</html>"""
