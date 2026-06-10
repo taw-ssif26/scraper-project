@@ -4,7 +4,7 @@ services:
     runtime: python
     buildCommand: |
       pip install -r requirements.txt
-      python -m playwright install chromium chromium-headless-shell --with-deps
+      python -m playwright install --with-deps
     startCommand: python main.py
     envVars:
       - key: BROWSER_HEADLESS
