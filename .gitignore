@@ -11,9 +11,8 @@ build/
 venv/
 .env
 
-# Output
+# Generated output
 output_files/
-output/
 cache/
 
 # IDE
