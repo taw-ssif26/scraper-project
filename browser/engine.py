@@ -15,7 +15,7 @@ class BrowserEngine:
         self._playwright = await async_playwright().start()
 
         launch_args = {
-            "headless": config.BROWSER_HEADLESS,
+            "headless": False,
             "args": [
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
@@ -25,6 +25,9 @@ class BrowserEngine:
                 "--no-zygote",
             ]
         }
+
+        if config.BROWSER_HEADLESS:
+            launch_args["args"].append("--headless")
 
         if config.PROXY_ENABLED and config.PROXY_URL:
             launch_args["proxy"] = {"server": config.PROXY_URL}
