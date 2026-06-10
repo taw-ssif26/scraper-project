@@ -4,7 +4,7 @@
     { "src": "index.html", "use": "@vercel/static" }
   ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "https://scraper-backend-production-d9ba.up.railway.app/$1" },
+    { "src": "/api/(.*)", "dest": "https://scraper-backend-production-d9ba.up.railway.app/api/$1" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
