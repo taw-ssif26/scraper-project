@@ -10,6 +10,8 @@ async def fetch_page_html(page, url: str) -> str:
     If page looks blocked, fall back to scraping API.
     Returns raw HTML either way.
     """
+    print(f"[Fetcher] Starting fetch for {url}")
+
     # Wait for any remaining JS to finish
     await asyncio.sleep(2)
 
@@ -17,19 +19,27 @@ async def fetch_page_html(page, url: str) -> str:
     html = ""
     try:
         html = await page.evaluate("document.documentElement.outerHTML")
-    except Exception:
-        pass
+        print(f"[Fetcher] evaluate success len={len(html)}")
+    except Exception as e:
+        print(f"[Fetcher] evaluate failed: {e}")
 
     # Fallback: wait and retry
     if not html or len(html.strip()) < 100:
+        print(f"[Fetcher] html too short ({len(html)}), waiting and retrying...")
         await asyncio.sleep(3)
         try:
             html = await page.evaluate("document.documentElement.outerHTML")
-        except Exception:
-            pass
+            print(f"[Fetcher] evaluate retry success len={len(html)}")
+        except Exception as e:
+            print(f"[Fetcher] evaluate retry failed: {e}")
+
+    print(f"[Fetcher] final html len={len(html)}")
+    if html:
+        print(f"[Fetcher] html start: {html[:200]}")
 
     # Check if we got real content or a block page
     if _is_blocked(html):
+        print(f"[Fetcher] _is_blocked returned True, trying API fallback...")
         return await _fetch_via_api(url)
 
     return html
