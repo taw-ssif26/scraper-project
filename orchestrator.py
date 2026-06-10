@@ -85,6 +85,9 @@ class Orchestrator:
 
             # Get raw HTML for analysis
             raw_html = await fetch_page_html(self.browser.page, url)
+            self._log(f"[Diag] URL after nav: {self.browser.page.url}")
+            self._log(f"[Diag] HTML length: {len(raw_html)}")
+            self._log(f"[Diag] HTML start: {raw_html[:200]}")
 
             # Check for captcha first — pause and let user solve
             if await is_captcha_page(self.browser.page):

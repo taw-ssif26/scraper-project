@@ -18,7 +18,7 @@ PROXY_ENABLED = os.getenv("PROXY_ENABLED", "false").lower() == "true"
 PROXY_URL     = os.getenv("PROXY_URL", "")
 
 # ── Scraper behaviour ─────────────────────────────────────────────────────────
-PAGE_TIMEOUT_MS     = 30_000   # how long to wait for a page to load
+PAGE_TIMEOUT_MS     = 60_000   # how long to wait for a page to load
 NAVIGATION_DELAY_MS = 1_500    # pause between actions (human-like)
 MAX_RETRIES         = 3        # retries on navigation failure
 MAX_PAGES           = 50       # safety cap — stop after this many pages

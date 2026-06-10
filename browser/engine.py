@@ -114,7 +114,7 @@ class BrowserEngine:
     async def navigate(self, url: str) -> bool:
         for attempt in range(1, config.MAX_RETRIES + 1):
             try:
-                await self.page.goto(url, timeout=config.PAGE_TIMEOUT_MS, wait_until="load")
+                await self.page.goto(url, timeout=config.PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
                 await self._human_delay()
                 await self.human_mouse_move()
                 return True
