@@ -16,21 +16,26 @@ async def fetch_page_html(page, url: str) -> str:
 
     # Try page.content() first
     html = await page.content()
+    print(f"[Fetcher] page.content() len={len(html)}")
 
     # If empty, try evaluate as fallback
     if not html or len(html.strip()) < 100:
+        print(f"[Fetcher] page.content() too short, trying evaluate...")
         try:
             html = await page.evaluate("document.documentElement.outerHTML")
-        except Exception:
-            pass
+            print(f"[Fetcher] evaluate attempt 1 len={len(html)}")
+        except Exception as e:
+            print(f"[Fetcher] evaluate failed: {e}")
 
     # If still empty, wait more and retry
     if not html or len(html.strip()) < 100:
+        print(f"[Fetcher] evaluate 1 too short, waiting and retrying...")
         await asyncio.sleep(3)
         try:
             html = await page.evaluate("document.documentElement.outerHTML")
-        except Exception:
-            pass
+            print(f"[Fetcher] evaluate attempt 2 len={len(html)}")
+        except Exception as e:
+            print(f"[Fetcher] evaluate 2 failed: {e}")
 
     # Check if we got real content or a block page
     if _is_blocked(html):
