@@ -2,44 +2,34 @@
 
 import httpx
 import config
+import asyncio
 
 async def fetch_page_html(page, url: str) -> str:
     """
-    Try Playwright first.
+    Get page HTML via page.evaluate() — page.content() returns empty on Railway.
     If page looks blocked, fall back to scraping API.
     Returns raw HTML either way.
     """
-    import asyncio
-
-    # Wait a moment for any remaining JS to finish
+    # Wait for any remaining JS to finish
     await asyncio.sleep(2)
 
-    # Try page.content() first
-    html = await page.content()
-    print(f"[Fetcher] page.content() len={len(html)}")
+    # Use evaluate — works reliably on Railway
+    html = ""
+    try:
+        html = await page.evaluate("document.documentElement.outerHTML")
+    except Exception:
+        pass
 
-    # If empty, try evaluate as fallback
+    # Fallback: wait and retry
     if not html or len(html.strip()) < 100:
-        print(f"[Fetcher] page.content() too short, trying evaluate...")
-        try:
-            html = await page.evaluate("document.documentElement.outerHTML")
-            print(f"[Fetcher] evaluate attempt 1 len={len(html)}")
-        except Exception as e:
-            print(f"[Fetcher] evaluate failed: {e}")
-
-    # If still empty, wait more and retry
-    if not html or len(html.strip()) < 100:
-        print(f"[Fetcher] evaluate 1 too short, waiting and retrying...")
         await asyncio.sleep(3)
         try:
             html = await page.evaluate("document.documentElement.outerHTML")
-            print(f"[Fetcher] evaluate attempt 2 len={len(html)}")
-        except Exception as e:
-            print(f"[Fetcher] evaluate 2 failed: {e}")
+        except Exception:
+            pass
 
     # Check if we got real content or a block page
     if _is_blocked(html):
-        print(f"[Fetcher] Blocked by site. Trying API fallback...")
         return await _fetch_via_api(url)
 
     return html

@@ -85,16 +85,6 @@ class Orchestrator:
 
             # Get raw HTML for analysis
             raw_html = await fetch_page_html(self.browser.page, url)
-            self._log(f"[Diag] URL after nav: {self.browser.page.url}")
-            self._log(f"[Diag] HTML length: {len(raw_html)}")
-            self._log(f"[Diag] HTML start: {raw_html[:200]}")
-            try:
-                title = await self.browser.page.title()
-                js_check = await self.browser.page.evaluate("document.readyState")
-                body_len = await self.browser.page.evaluate("document.body?.innerHTML?.length ?? -1")
-                self._log(f"[Diag] title='{title}' readyState={js_check} bodyLen={body_len}")
-            except Exception as e:
-                self._log(f"[Diag] eval error: {e}")
 
             # Check for captcha first — pause and let user solve
             if await is_captcha_page(self.browser.page):
