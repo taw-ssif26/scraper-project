@@ -5,7 +5,7 @@ from browser.captcha_detector import is_captcha_page
 from browser.dom_cleaner import clean_html
 from output.writer import save_results
 import config
-from browser.fetcher import fetch_page_html
+
 
 class State(Enum):
     IDLE     = "idle"
@@ -16,7 +16,6 @@ class State(Enum):
     ERROR    = "error"
 
 
-# Signals that indicate a hard block — not a captcha, just rejected
 _BLOCK_SIGNALS = [
     "access denied",
     "403 forbidden",
@@ -40,12 +39,21 @@ class Orchestrator:
         self._captcha_resolved = asyncio.Event()
 
     async def run(self, url: str, task: str):
+        """Single URL entry point."""
+        urls = self._expand_urls(url)
+        await self._run_urls(urls, task)
+
+    async def _run_urls(self, urls: list, task: str):
         self._transition(State.RUNNING)
         self.records = []
         try:
             self._log("Launching browser...")
             await self.browser.launch()
-            await self._scrape_loop(url, task)
+            for url in urls:
+                if self.state != State.RUNNING:
+                    break
+                self._log(f"--- Starting: {url} ---")
+                await self._scrape_loop(url, task)
         except Exception as e:
             self._log(f"Fatal error: {e}")
             self._transition(State.ERROR)
@@ -55,12 +63,39 @@ class Orchestrator:
             self._transition(State.COMPLETE)
             self._log(f"Done. {len(self.records)} records collected.")
 
+    def _expand_urls(self, url: str) -> list:
+        """
+        Expand URL patterns into a list of URLs.
+        Supports:
+          {a-z}  → generates url for each letter a to z
+          {1-50} → generates url for pages 1 to 50
+        Plain URL → returns as single-item list.
+        """
+        import re
+
+        # Letter range: {a-z}
+        letter_match = re.search(r'\{([a-z])-([a-z])\}', url)
+        if letter_match:
+            start = letter_match.group(1)
+            end   = letter_match.group(2)
+            letters = [chr(c) for c in range(ord(start), ord(end) + 1)]
+            return [url[:letter_match.start()] + l + url[letter_match.end():] for l in letters]
+
+        # Number range: {1-50}
+        num_match = re.search(r'\{(\d+)-(\d+)\}', url)
+        if num_match:
+            start = int(num_match.group(1))
+            end   = int(num_match.group(2))
+            return [url[:num_match.start()] + str(i) + url[num_match.end():] for i in range(start, end + 1)]
+
+        return [url]
+
     def stop(self):
         self._log("Stopping...")
-        self._transition(State.STOPPED)
         if self.records:
             self.output_paths = save_results(self.records)
             self._log(f"Partial results saved: {len(self.records)} records")
+        self._transition(State.STOPPED)
         self._captcha_resolved.set()
 
     def resolve_captcha(self):
@@ -86,32 +121,30 @@ class Orchestrator:
                 self._log(f"Failed to load: {url}")
                 break
 
-            # Get raw HTML for analysis
-            await asyncio.sleep(3)  # wait for full render on server
-            raw_html = await fetch_page_html(self.browser.page, url)
+            await asyncio.sleep(3)
+            raw_html = await self.browser.get_page_html()
 
-            # Check for captcha first — pause and let user solve
             if await is_captcha_page(self.browser.page):
                 await self._handle_captcha()
                 if self.state != State.RUNNING:
                     break
-                # Re-fetch HTML after captcha solved
-                rraw_html = await fetch_page_html(self.browser.page, url)
+                raw_html = await self.browser.get_page_html()
 
-            # Check for hard block — not solvable, inform user and stop
             block_reason = self._detect_block(raw_html)
             if block_reason:
-                self._log(f"🚫 Blocked by site: {block_reason}")
-                self._log("This site rejected the request. Possible fixes:")
-                self._log("  1. Enable a residential proxy in .env (PROXY_ENABLED=true)")
-                self._log("  2. Try again later — some blocks are temporary")
+                self._log(f"Blocked by site: {block_reason}")
+                self._log("Possible fixes:")
+                self._log("  1. Enable a residential proxy (PROXY_ENABLED=true)")
+                self._log("  2. Try again later")
                 self._log("  3. This site may require a scraping API service")
                 break
 
             await self.browser.scroll_to_bottom()
 
+            # ── Extraction: selectors first, LLM text fallback ────────────────
             structure = get_structure(domain)
             cache_hit = structure is not None
+            page_records = []
 
             if structure:
                 self._log(f"Page {pages_scraped + 1}: using cached structure...")
@@ -120,6 +153,7 @@ class Orchestrator:
                     self._log("Structure outdated. Re-learning...")
                     structure = None
                     cache_hit = False
+                    page_records = []
 
             if not structure:
                 self._log(f"Page {pages_scraped + 1}: learning structure via LLM...")
@@ -131,26 +165,24 @@ class Orchestrator:
                         save_structure(domain, structure)
                         self._log("Structure learned and cached.")
                     page_records = await extract_with_structure(self.browser.page, structure)
-                else:
-                    self._log("Structure learning failed. Skipping page.")
-                    page_records = []
 
-            if page_records:
-                self.records.extend(page_records)
-                self._log(f"  -> {len(page_records)} records (total: {len(self.records)})")
-            else:
-                self._log("  -> Selector extraction failed. Trying direct LLM extraction...")
-                raw_html = await self.browser.get_page_html()
+            # Fallback: direct LLM text extraction if selectors got nothing
+            if not page_records:
+                self._log("  Selector extraction empty. Trying direct LLM extraction...")
                 clean_text = clean_html(raw_html)
                 await asyncio.sleep(2)
-                fallback_records = await extract_data(clean_text, task)
-                if fallback_records:
-                    self.records.extend(fallback_records)
-                    self._log(f"  -> {len(fallback_records)} records via fallback (total: {len(self.records)})")
+                page_records = await extract_data(clean_text, task)
+                if page_records:
+                    self._log(f"  -> {len(page_records)} records via LLM fallback (total: {len(self.records) + len(page_records)})")
                 else:
                     self._log("  -> No records found on this page.")
 
+            else:
+                self._log(f"  -> {len(page_records)} records (total: {len(self.records) + len(page_records)})")
+
+            self.records.extend(page_records)
             pages_scraped += 1
+
             next_url = await self._find_next_page()
             if next_url:
                 url = next_url
@@ -166,27 +198,18 @@ class Orchestrator:
                 self._log("No data collected.")
 
     def _detect_block(self, html: str) -> str | None:
-        """
-        Check HTML for hard block signals.
-        Returns a description string if blocked, None if clean.
-        Does NOT flag captcha pages — those are handled separately.
-        """
-        html_lower = html.lower()
-
-        # Suspiciously short page — likely a block or redirect
         if len(html.strip()) < 500:
             return "Page too short — likely a block or empty response"
-
+        html_lower = html.lower()
         for signal in _BLOCK_SIGNALS:
             if signal in html_lower:
                 return f'"{signal}" detected in page'
-
         return None
 
     async def _handle_captcha(self):
         self._transition(State.PAUSED)
         self._captcha_resolved.clear()
-        self._log("⚠️ CAPTCHA DETECTED — Please solve it in the browser window, then click Resume.")
+        self._log("CAPTCHA DETECTED — Please solve it in the browser window, then click Resume.")
         await self._captcha_resolved.wait()
 
     async def _find_next_page(self):
