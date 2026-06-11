@@ -92,7 +92,7 @@ def status():
         })
     return JSONResponse({
         "state": _orchestrator.state.value,
-        "logs": _log_lines[-30:],
+        "logs": _log_lines[-100:],
         "records": len(_orchestrator.records),
         "output": _orchestrator.output_paths.get("csv") if _orchestrator.output_paths else None,
         "captcha": _orchestrator.state == State.PAUSED,

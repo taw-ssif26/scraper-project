@@ -377,15 +377,15 @@
     stateLabel.textContent = STATE_LABELS[data.state] || data.state;
     recordCount.textContent = data.records > 0 ? data.records + ' records' : '';
 
-    if (data.logs.length > lastLogCount) {
-      const newLines = data.logs.slice(lastLogCount);
-      newLines.forEach(line => {
+    if (data.logs.length !== lastLogCount) {
+      logBox.innerHTML = '';
+      data.logs.forEach(line => {
         const p = document.createElement('p');
         p.className = 'log-line';
-        if (line.includes('[State]'))  p.classList.add('state');
+        if (line.includes('[State]')) p.classList.add('state');
         if (line.includes('error') || line.includes('Error') || line.includes('Fatal')) p.classList.add('error');
         if (line.includes('cached') || line.includes('Saved')) p.classList.add('cache');
-        if (line.includes('CAPTCHA') || line.includes('outdated')) p.classList.add('warn');
+        if (line.includes('CAPTCHA') || line.includes('outdated') || line.includes('Blocked')) p.classList.add('warn');
         p.textContent = line;
         logBox.appendChild(p);
       });
@@ -401,7 +401,7 @@
       stopPolling();
     }
 
-    if (data.state === 'complete' && data.output) {
+    if (['complete', 'stopped'].includes(data.state) && data.output) {
       downloadSection.classList.add('visible');
     }
   }

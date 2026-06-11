@@ -58,6 +58,9 @@ class Orchestrator:
     def stop(self):
         self._log("Stopping...")
         self._transition(State.STOPPED)
+        if self.records:
+            self.output_paths = save_results(self.records)
+            self._log(f"Partial results saved: {len(self.records)} records")
         self._captcha_resolved.set()
 
     def resolve_captcha(self):
