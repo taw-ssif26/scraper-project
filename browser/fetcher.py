@@ -58,9 +58,8 @@ def _is_blocked(html: str) -> bool:
         "403 forbidden",
         "blocked",
         "unusual traffic",
-        len(html) < 1500,            # suspiciously short page
     ]
-    return any(signals[:-1]) or signals[-1]
+    return any(s in html_lower for s in signals) or len(html) < 1500
 
 
 async def _fetch_via_api(url: str) -> str:

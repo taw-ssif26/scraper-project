@@ -84,6 +84,7 @@ class Orchestrator:
                 break
 
             # Get raw HTML for analysis
+            await asyncio.sleep(3)  # wait for full render on server
             raw_html = await fetch_page_html(self.browser.page, url)
 
             # Check for captcha first — pause and let user solve
@@ -161,7 +162,7 @@ class Orchestrator:
         html_lower = html.lower()
 
         # Suspiciously short page — likely a block or redirect
-        if len(html.strip()) < 1200:
+        if len(html.strip()) < 500:
             return "Page too short — likely a block or empty response"
 
         for signal in _BLOCK_SIGNALS:
