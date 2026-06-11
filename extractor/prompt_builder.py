@@ -1,24 +1,21 @@
 def build_structure_prompt(page_html: str, user_task: str) -> str:
-    return f"""You are a web scraping expert.
+    return f"""You are a web scraping expert analyzing real HTML.
 
-Analyze this HTML and return CSS selectors to extract the requested data.
-
-USER TASK:
-{user_task}
+TASK: {user_task}
 
 HTML:
 {page_html}
 
-RULES:
-- Return ONLY valid JSON, no explanation, no markdown, no code fences.
-- Use EXACT class names as they appear in the HTML above.
-- Do not shorten, guess, or modify any class name.
-- Prefer specific selectors like "article.product_pod h3 a" over generic ones like "h3 a".
-- Every selector you return MUST match elements visible in the HTML above.
-- If you cannot find a reliable selector for a field, omit that field entirely.
+INSTRUCTIONS:
+- Find the REPEATING elements that contain the requested data.
+- Look for lists, grids, tables, or card layouts — data is almost always repeated.
+- Use EXACT class names from the HTML. Copy them character for character.
+- Test your selector mentally: does it match multiple similar elements?
+- If class names look randomized or minified, use tag+position selectors instead.
+- If you cannot identify reliable selectors, return empty fields object.
 
-OUTPUT FORMAT:
-{{"fields": {{"field_name": "css_selector", "field_name2": "css_selector2"}}}}
+RETURN ONLY THIS JSON, nothing else:
+{{"fields": {{"field_name": "css_selector"}}}}
 
 YOUR JSON:"""
 

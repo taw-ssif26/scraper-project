@@ -72,7 +72,7 @@ class Orchestrator:
         from urllib.parse import urlparse
         from extractor.structure_cache import get_structure, save_structure
         from extractor.fast_extractor import extract_with_structure, structure_seems_broken
-        from extractor.llm_client import learn_structure
+        from extractor.llm_client import learn_structure, extract_data
 
         domain = urlparse(start_url).netloc
         url = start_url
@@ -139,7 +139,16 @@ class Orchestrator:
                 self.records.extend(page_records)
                 self._log(f"  -> {len(page_records)} records (total: {len(self.records)})")
             else:
-                self._log("  -> No records found on this page.")
+                self._log("  -> Selector extraction failed. Trying direct LLM extraction...")
+                raw_html = await self.browser.get_page_html()
+                clean_text = clean_html(raw_html)
+                await asyncio.sleep(2)
+                fallback_records = await extract_data(clean_text, task)
+                if fallback_records:
+                    self.records.extend(fallback_records)
+                    self._log(f"  -> {len(fallback_records)} records via fallback (total: {len(self.records)})")
+                else:
+                    self._log("  -> No records found on this page.")
 
             pages_scraped += 1
             next_url = await self._find_next_page()
